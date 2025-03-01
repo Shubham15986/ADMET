@@ -959,5 +959,6 @@ def ai_optimize_smiles(smiles):
         return smiles
 
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True)
+    port = int(os.getenv('PORT', 5000))
+    print(f"Starting Flask on 0.0.0.0:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
