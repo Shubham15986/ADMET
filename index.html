@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADMET Prediction Tool</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        .radar-chart {
+            max-width: 100%;
+            height: auto;
+        }
+        .subgroup {
+            margin-bottom: 20px;
+        }
+        .property-card {
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .property-card.good {
+            background-color: #d4edda;
+        }
+        .property-card.poor {
+            background-color: #f8d7da;
+        }
+        .property-card small {
+            color: #666;
+        }
+        .chat-box {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .loader {
+            border: 16px solid #f3f3f3;
+            border-top: 16px solid #3498db;
+            border-radius: 50%;
+            width: 120px;
+            height: 120px;
+            animation: spin 2s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">ADMET Prediction Tool</h1>
+        <form id="predictionForm" class="mb-3">
+            <div class="mb-3">
+                <label for="smilesInput" class="form-label">Enter SMILES String or Compound Name:</label>
+                <input type="text" class="form-control" id="smilesInput" placeholder="e.g., CCO or Aspirin" required>
+                <div class="form-text">Examples: "CCO" (ethanol), "O=C(Oc1ccccc1C(=O)O)C" (Aspirin SMILES), or just "Aspirin"</div>
+            </div>
+            <button type="submit" class="btn btn-primary">Predict ADMET Properties</button>
+            <button type="button" class="btn btn-success" id="geminiOptimizeBtn">Optimize with Gemini</button>
+        </form>
+
+        <div id="results" class="results" style="display: none;">
+            <h2>Prediction Results</h2>
+            <div id="propertyResults" class="subgroup"></div>
+            <div class="row">
+                <div class="col-md-6">
+                    <h3>Original Radar</h3>
+                    <img id="originalRadar" class="radar-chart" src="" alt="Original Radar" style="display: none;">
+                </div>
+                <div class="col-md-6">
+                    <h3 id="optimizedRadarTitle">ACO-Optimized Radar</h3>
+                    <img id="optimizedRadar" class="radar-chart" src="" alt="Optimized Radar" style="display: none;">
+                </div>
+            </div>
+            <div id="improvements" class="mt-4"></div>
+        </div>
+
+        <div class="chat-box">
+            <h3>Chat with Gemini</h3>
+            <div id="chatMessages"></div>
+            <form id="chatForm" class="mt-3">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="chatInput" placeholder="Ask a question..." required>
+                    <button type="submit" class="btn btn-primary">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loader"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        function showLoading() {
+            loadingOverlay.style.display = 'flex';
+        }
+
+        function hideLoading() {
+            loadingOverlay.style.display = 'none';
+        }
+
+        // Predict ADMET Properties
+        document.getElementById('predictionForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const smiles = document.getElementById('smilesInput').value;
+            showLoading();
+            await fetchPrediction('/predict', smiles);
+            hideLoading();
+        });
+
+        // Optimize with Gemini
+        document.getElementById('geminiOptimizeBtn').addEventListener('click', async function () {
+            const smiles = document.getElementById('smilesInput').value;
+            showLoading();
+            await fetchPrediction('/optimize_with_gemini', smiles);
+            hideLoading();
+        });
+
+        // Chat with Gemini
+        document.getElementById('chatForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const query = document.getElementById('chatInput').value;
+            const chatMessages = document.getElementById('chatMessages');
+
+            // Add user message
+            const userMsg = document.createElement('p');
+            userMsg.innerHTML = `<strong>You:</strong> ${query}`;
+            chatMessages.appendChild(userMsg);
+
+            showLoading();
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query }),
+                });
+                const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // Add Gemini response
+                const geminiMsg = document.createElement('p');
+                geminiMsg.innerHTML = `<strong>Gemini:</strong> ${data.response}`;
+                chatMessages.appendChild(geminiMsg);
+            } catch (error) {
+                const errorMsg = document.createElement('p');
+                errorMsg.innerHTML = `<strong>Error:</strong> ${error.message}`;
+                chatMessages.appendChild(errorMsg);
+            }
+            hideLoading();
+
+            document.getElementById('chatInput').value = '';
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        });
+
+        async function fetchPrediction(endpoint, smiles) {
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ smiles: smiles }),
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('Server Response:', data);
+
+                if (data.error) {
+                    alert(data.error);
+                    document.getElementById('results').style.display = 'none';
+                    return;
+                }
+
+                document.getElementById('results').style.display = 'block';
+                const propertyResults = document.getElementById('propertyResults');
+                propertyResults.innerHTML = '';
+
+                // Function to render properties for a variant
+                function renderProperties(variant, title) {
+                    const accordion = document.createElement('div');
+                    accordion.className = 'accordion mb-3';
+                    accordion.innerHTML = `
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#${title.toLowerCase().replace(' ', '-')}-collapse" aria-expanded="true" aria-controls="${title.toLowerCase().replace(' ', '-')}-collapse">
+                                    ${title}
+                                </button>
+                            </h2>
+                            <div id="${title.toLowerCase().replace(' ', '-')}-collapse" class="accordion-collapse collapse show">
+                                <div class="accordion-body">
+                                    <p><strong>SMILES:</strong> ${variant.smiles}</p>
+                                    <h4>Physicochemical Properties</h4>
+                                    ${Object.entries(variant.features.Physicochemical).map(([key, value]) => `<p><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}</p>`).join('')}
+                                    <h4>Lipophilicity</h4>
+                                    ${Object.entries(variant.features.Lipophilicity).map(([key, value]) => `<p><strong>${key}:</strong> ${value.toFixed(3)}</p>`).join('')}
+                                    <h4>Solubility</h4>
+                                    ${Object.entries(variant.features.Solubility).map(([key, value]) => `<p><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}</p>`).join('')}
+                                    <h4>Drug-Likeness</h4>
+                                    ${Object.entries(variant.features.DrugLikeness).map(([key, value]) => `<p><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}</p>`).join('')}
+                                    <h4>Medicinal Chemistry</h4>
+                                    ${Object.entries(variant.features.MedicinalChem).map(([key, value]) => `<p><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}</p>`).join('')}
+                                    <h4>Pharmacokinetics</h4>
+                                    ${Object.entries(variant.features.Pharmacokinetics).map(([key, value]) => `<p><strong>${key}:</strong> ${value}</p>`).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    propertyResults.appendChild(accordion);
+                }
+
+                if (endpoint === '/predict') {
+                    // Render ADME Predictions
+                    const admeSection = document.createElement('div');
+                    admeSection.innerHTML = '<h4>ADME Predictions</h4>';
+                    if (data.predictions) {
+                        for (const [key, value] of Object.entries(data.predictions)) {
+                            if (key !== 'SMILES') {
+                                const card = document.createElement('div');
+                                card.className = 'property-card';
+                                card.innerHTML = `
+                                    <strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}
+                                `;
+                                admeSection.appendChild(card);
+                            }
+                        }
+                    }
+                    propertyResults.appendChild(admeSection);
+
+                    // Render Detailed Analysis
+                    const detailedSection = document.createElement('div');
+                    detailedSection.innerHTML = '<h4>Detailed Molecular Analysis</h4>';
+                    if (data.detailed_analysis && !data.detailed_analysis.error) {
+                        detailedSection.innerHTML += `
+                            <h5>Properties</h5>
+                            ${Object.entries(data.detailed_analysis.properties).map(([key, value]) => `<p><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(3) : value}</p>`).join('')}
+                            <h5>Druglikeness</h5>
+                            <p><strong>Druglikeness:</strong> ${data.detailed_analysis.druglikeness}</p>
+                        `;
+                    } else {
+                        detailedSection.innerHTML += '<p>No detailed analysis available</p>';
+                    }
+                    propertyResults.appendChild(detailedSection);
+
+                    // Render Rule-Based ADMET
+                    const rulesSection = document.createElement('div');
+                    rulesSection.innerHTML = '<h4>Rule-Based ADMET Predictions</h4>';
+                    if (data.rules_admet && typeof data.rules_admet === 'object') {
+                        for (const [property, details] of Object.entries(data.rules_admet)) {
+                            const card = document.createElement('div');
+                            card.className = `property-card ${details.prediction.toLowerCase().includes('good') || 
+                                details.prediction.toLowerCase().includes('yes') || 
+                                details.prediction.toLowerCase().includes('penetrant') ? 'good' : 'poor'}`;
+                            card.innerHTML = `
+                                <strong>${property}:</strong> ${details.prediction}<br>
+                                <small>Confidence: ${(details.confidence * 100).toFixed(2)}%</small>
+                            `;
+                            rulesSection.appendChild(card);
+                        }
+                    } else {
+                        rulesSection.innerHTML += '<p>No ADMET data available</p>';
+                    }
+                    propertyResults.appendChild(rulesSection);
+
+                    // Render properties for original and ACO-optimized
+                    renderProperties(data.original, "Original Molecule");
+                    renderProperties(data.optimized, "ACO-Optimized Molecule");
+
+                    // Display radar charts
+                    document.getElementById('optimizedRadarTitle').textContent = "ACO-Optimized Radar";
+                    const originalRadar = document.getElementById('originalRadar');
+                    originalRadar.src = data.original?.radar ? `data:image/png;base64,${data.original.radar}` : '';
+                    originalRadar.style.display = data.original?.radar ? 'block' : 'none';
+
+                    const optimizedRadar = document.getElementById('optimizedRadar');
+                    optimizedRadar.src = data.optimized?.radar ? `data:image/png;base64,${data.optimized.radar}` : '';
+                    optimizedRadar.style.display = data.optimized?.radar ? 'block' : 'none';
+
+                    document.getElementById('improvements').innerHTML = '';
+                } else if (endpoint === '/optimize_with_gemini') {
+                    // Render properties for original and Gemini-optimized
+                    renderProperties(data.original, "Original Molecule");
+                    renderProperties(data.gemini_optimized, "Gemini-Optimized Molecule");
+
+                    // Display radar charts
+                    document.getElementById('optimizedRadarTitle').textContent = "Gemini-Optimized Radar";
+                    const originalRadar = document.getElementById('originalRadar');
+                    originalRadar.src = data.original?.radar ? `data:image/png;base64,${data.original.radar}` : '';
+                    originalRadar.style.display = data.original?.radar ? 'block' : 'none';
+
+                    const optimizedRadar = document.getElementById('optimizedRadar');
+                    optimizedRadar.src = data.gemini_optimized?.radar ? `data:image/png;base64,${data.gemini_optimized.radar}` : '';
+                    optimizedRadar.style.display = data.gemini_optimized?.radar ? 'block' : 'none';
+
+                    // Display improvements
+                    const improvements = document.getElementById('improvements');
+                    improvements.innerHTML = `
+                        <h4>Improvements from Original</h4>
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Property</th>
+                                    <th>Change</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>QED</td>
+                                    <td>${data.improvements.QED.toFixed(3)} (${data.improvements.QED > 0 ? 'Improved' : 'Decreased'})</td>
+                                </tr>
+                                <tr>
+                                    <td>LogP</td>
+                                    <td>${data.improvements.LogP.toFixed(3)} (${data.improvements.LogP > 0 ? 'Increased' : 'Decreased'})</td>
+                                </tr>
+                                <tr>
+                                    <td>Toxicity</td>
+                                    <td>${data.improvements.Toxicity.toFixed(3)} (${data.improvements.Toxicity > 0 ? 'Reduced' : 'Increased'})</td>
+                                </tr>
+                                <tr>
+                                    <td>Fitness</td>
+                                    <td>${data.improvements.Fitness.toFixed(3)} (${data.improvements.Fitness > 0 ? 'Improved' : 'Decreased'})</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    `;
+                }
+            } catch (error) {
+                console.error('Fetch Error:', error);
+                alert('Failed to fetch data. Please check the server and try again.');
+                document.getElementById('results').style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
